@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DepthWizard — Relative Depth &amp; Estimated Height Inspector</title>
+  <meta name="description" content="DepthWizard SIH research prototype: upload an RGB image, generate a unitless relative-depth grid and a calibrated height estimate, inspect it in 2D and 3D, and export the results.">
+  <meta name="theme-color" content="#0a0f14">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f1c24'/%3E%3Cpath d='M4 23l7-9 5 6 4-4 8 7' fill='none' stroke='%233dd6c0' stroke-width='2.4' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/" } }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
+        <rect width="40" height="40" rx="11" fill="url(#bm)"/>
+        <path d="M6 28l8-10 6 7 5-5 9 8" fill="none" stroke="#062823" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="M6 33h28" stroke="#062823" stroke-opacity=".45" stroke-width="2" stroke-linecap="round"/>
+        <defs><linearGradient id="bm" x1="0" y1="0" x2="40" y2="40"><stop stop-color="#5ff0d9"/><stop offset="1" stop-color="#2aa7c9"/></linearGradient></defs>
+      </svg>
+      <div>
+        <span class="brand-name">DepthWizard</span>
+        <span class="brand-sub">SIH research prototype · single-image terrain inspection</span>
+      </div>
+    </div>
+
+    <nav class="flow" aria-label="Workflow progress">
+      <ol>
+        <li data-flow="image"><a href="#step-image"><span class="flow-dot">1</span>Image</a></li>
+        <li data-flow="calibration"><a href="#step-calibration"><span class="flow-dot">2</span>Interpretation</a></li>
+        <li data-flow="process"><a href="#step-process"><span class="flow-dot">3</span>Process</a></li>
+        <li data-flow="inspect"><a href="#results-stage"><span class="flow-dot">4</span>Inspect</a></li>
+        <li data-flow="export"><a href="#step-export"><span class="flow-dot">5</span>Export</a></li>
+      </ol>
+    </nav>
+
+    <div class="backend">
+      <button id="backend-status" class="status-pill" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="backend-popover" data-state="checking">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="backend-status-text">Checking backend…</span>
+      </button>
+      <div id="backend-popover" class="popover" role="dialog" aria-label="Backend status" hidden>
+        <h2 class="popover-title">Backend</h2>
+        <dl class="kv">
+          <dt>URL</dt><dd><code id="backend-url"></code></dd>
+          <dt>Service</dt><dd id="health-service">—</dd>
+          <dt>Frozen checkpoint</dt><dd id="health-checkpoint">—</dd>
+          <dt>Rasterio (GeoTIFF/DEM)</dt><dd id="health-rasterio">—</dd>
+          <dt>Run storage</dt><dd id="health-storage">—</dd>
+        </dl>
+        <p class="hint">Change the URL in <code>frontend/config.js</code>.</p>
+        <button id="health-recheck" class="btn btn--ghost btn--sm" type="button">Re-check</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="backend-banner" class="banner" role="alert" hidden>
+    <div>
+      <strong>Backend unreachable.</strong> <span id="backend-banner-text"></span>
+      <code id="backend-command" class="cmd"></code>
+    </div>
+    <button id="banner-retry" class="btn btn--ghost btn--sm" type="button">Retry</button>
+  </div>
+
+  <main id="main" class="layout">
+    <!-- ============ SETUP ============ -->
+    <aside class="setup" aria-label="Processing setup">
+      <section class="card" id="step-image" aria-labelledby="h-image">
+        <header class="card-head">
+          <span class="step-num" aria-hidden="true">1</span>
+          <h2 id="h-image">Add an image</h2>
+        </header>
+
+        <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-describedby="drop-formats">
+          <input id="image-input" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true">
+          <svg class="dz-icon" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M8 34l10-12 7 8 5-5 10 9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+            <path d="M24 6v14m0-14l-5 5m5-5l5 5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <rect x="4" y="4" width="40" height="40" rx="10" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="1.6" stroke-dasharray="4 4"/>
+          </svg>
+          <p class="dz-title">Drop an RGB image here</p>
+          <p class="dz-sub">or <span class="link-like">browse files</span></p>
+          <p id="drop-formats" class="dz-formats">PNG · JPG/JPEG <span id="tif-format-note"></span> · max 150 MB</p>
+        </div>
+
+        <div id="file-card" class="file-card" hidden>
+          <div class="file-thumb" id="file-thumb-wrap"><img id="file-thumb" alt="Preview of the selected input image"></div>
+          <dl class="file-meta">
+            <dt>File</dt><dd id="file-name" class="truncate"></dd>
+            <dt>Grid</dt><dd id="file-dims"></dd>
+            <dt>Size</dt><dd id="file-size"></dd>
+            <dt>Format</dt><dd id="file-format"></dd>
+          </dl>
+          <div class="file-actions">
+            <button id="replace-file" class="btn btn--ghost btn--sm" type="button">Replace</button>
+            <button id="remove-file" class="btn btn--ghost btn--sm btn--danger" type="button">Remove</button>
+          </div>
+        </div>
+        <p id="image-msg" class="field-msg" role="alert" hidden></p>
+      </section>
+
+      <section class="card" id="step-calibration" aria-labelledby="h-cal">
+        <header class="card-head">
+          <span class="step-num" aria-hidden="true">2</span>
+          <h2 id="h-cal">Choose height interpretation</h2>
+        </header>
+        <fieldset class="modes">
+          <legend class="visually-hidden">Height interpretation</legend>
+          <label class="mode-card">
+            <input type="radio" name="calibration" value="stage12_validation" checked>
+            <span class="mode-body">
+              <span class="mode-title">Stage 12 validation-calibrated estimate <span class="chip chip--height">m (estimated)</span></span>
+              <span class="mode-desc">Validation-scene scale/shift on the frozen Experiment B output. An <em>estimated</em> height surface — not surveyed absolute elevation.</span>
+            </span>
+          </label>
+          <label class="mode-card">
+            <input type="radio" name="calibration" value="relative">
+            <span class="mode-body">
+              <span class="mode-title">Unitless relative output <span class="chip chip--relative">unitless</span></span>
+              <span class="mode-desc">Normalised model output only. No metric mapping is applied or implied.</span>
+            </span>
+          </label>
+          <label class="mode-card">
+            <input type="radio" name="calibration" value="custom">
+            <span class="mode-body">
+              <span class="mode-title">Custom scale / shift <span class="chip chip--neutral">your units</span></span>
+              <span class="mode-desc">Your own calibration. Units and accuracy depend entirely on your reference.</span>
+            </span>
+          </label>
+        </fieldset>
+
+        <div id="custom-fields" class="custom-fields" hidden>
+          <p class="formula"><code>height = scale × h<sub>Stage 12 inverse</sub> + shift</code></p>
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">Scale</span>
+              <input id="custom-scale" type="number" step="any" value="1" inputmode="decimal">
+            </label>
+            <label class="field">
+              <span class="field-label">Shift</span>
+              <input id="custom-shift" type="number" step="any" value="0" inputmode="decimal">
+            </label>
+          </div>
+          <label class="check">
+            <input id="custom-metres" type="checkbox">
+            <span>My calibration output is in metres</span>
+          </label>
+          <p id="custom-msg" class="field-msg" role="alert" hidden></p>
+        </div>
+
+        <div class="units-preview">
+          <div><span class="muted">Height output</span> <span id="units-preview" class="chip chip--height">m (estimated)</span></div>
+          <div><span class="muted">Relative depth</span> <span class="chip chip--relative">unitless</span></div>
+        </div>
+      </section>
+
+      <details class="card card--details" id="step-optional">
+        <summary>
+          <span class="summary-title">Optional: slope, DEM &amp; GeoTIFF</span>
+          <span id="rasterio-badge" class="chip chip--neutral">checking…</span>
+        </summary>
+        <div class="details-body">
+          <label class="field">
+            <span class="field-label">Pixel size in metres <span class="muted">(for slope in degrees)</span></span>
+            <input id="pixel-size" type="number" min="0" step="any" inputmode="decimal" placeholder="e.g. 0.5">
+          </label>
+          <p id="pixel-hint" class="hint">Slope is only computed when the height output is in metres and pixel spacing is known.</p>
+
+          <div class="divider"></div>
+
+          <div id="dem-block">
+            <label class="field" id="dem-field">
+              <span class="field-label">Ground DEM <span class="muted">(GeoTIFF)</span></span>
+              <input id="dem-input" type="file" accept=".tif,.tiff">
+            </label>
+            <p id="dem-unavailable" class="notice notice--warn" hidden>
+              <strong>Unavailable on this backend.</strong> GeoTIFF input/export and DEM processing need Rasterio, which is not installed. Install with <code>./venv/bin/python -m pip install rasterio</code> and restart the backend.
+            </p>
+            <label class="check">
+              <input id="dem-aligned" type="checkbox">
+              <span>For PNG/JPG input, I confirm the DEM has the same dimensions and is pixel-aligned with the image.</span>
+            </label>
+            <p class="hint">An ordinary PNG/JPG has no CRS or map transform, so the DEM can only be used on a same-sized pixel grid that you confirm is aligned. A DSM is DEM + estimated height; both error sources propagate. DEM use requires a metre-based height interpretation.</p>
+            <p id="dem-msg" class="field-msg" role="alert" hidden></p>
+          </div>
+        </div>
+      </details>
+
+      <section class="card card--process" id="step-process" aria-labelledby="h-proc">
+        <header class="card-head">
+          <span class="step-num" aria-hidden="true">3</span>
+          <h2 id="h-proc">Process</h2>
+        </header>
+        <button id="process-btn" class="btn btn--primary btn--lg btn--block" type="button" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18l6-8 4 5 3-3 5 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/></svg>
+          Generate depth &amp; height
+        </button>
+        <p id="process-hint" class="hint" aria-live="polite">Add an image to continue.</p>
+        <p class="hint subtle">Runs the frozen Stage 12 Experiment B checkpoint on the local backend. Nothing is retrained.</p>
+      </section>
+    </aside>
+
+    <!-- ============ WORKSPACE ============ -->
+    <section class="workspace" aria-label="Results workspace">
+      <!-- Empty -->
+      <div id="state-empty" class="ws-state ws-empty">
+        <div class="empty-visual" aria-hidden="true">
+          <svg viewBox="0 0 600 260" preserveAspectRatio="xMidYMid slice">
+            <defs>
+              <linearGradient id="eg" x1="0" x2="1"><stop stop-color="#3dd6c0"/><stop offset=".55" stop-color="#7aa7ff"/><stop offset="1" stop-color="#a99bff"/></linearGradient>
+            </defs>
+            <g fill="none" stroke="url(#eg)" stroke-width="1.2" class="contours">
+              <path d="M-20 200 C 80 150 140 210 230 160 S 380 90 470 140 S 590 120 640 150"/>
+              <path d="M-20 215 C 80 170 150 225 240 180 S 380 115 470 160 S 590 145 640 170" opacity=".8"/>
+              <path d="M-20 230 C 90 190 160 240 250 200 S 390 140 480 182 S 590 170 640 190" opacity=".6"/>
+              <path d="M-20 245 C 90 210 170 255 260 220 S 400 165 490 204 S 590 195 640 210" opacity=".45"/>
+              <path d="M170 120 C 210 80 290 70 320 100 S 300 150 250 150 S 140 150 170 120Z" opacity=".9"/>
+              <path d="M200 118 C 230 95 280 90 300 108 S 285 135 255 136 S 185 135 200 118Z" opacity=".7"/>
+              <path d="M228 116 C 245 105 270 104 280 112 S 270 125 255 125 S 220 124 228 116Z" opacity=".5"/>
+              <path d="M400 70 C 440 40 520 50 530 80 S 480 115 440 108 S 370 95 400 70Z" opacity=".7"/>
+              <path d="M430 74 C 455 58 500 62 505 80 S 475 97 452 94 S 415 88 430 74Z" opacity=".5"/>
+            </g>
+          </svg>
+        </div>
+        <h1 class="empty-title">Inspect terrain structure from a single image</h1>
+        <p class="empty-lead">Add an RGB image, choose how heights are interpreted, and DepthWizard produces a <span class="chip chip--relative">unitless</span> relative-depth grid plus a separately labelled height surface you can inspect pixel-by-pixel in 2D and 3D.</p>
+        <ol class="pipeline">
+          <li><span>1</span><div><strong>Image</strong><small>PNG / JPG</small></div></li>
+          <li><span>2</span><div><strong>Frozen model</strong><small>Stage 12 Exp. B</small></div></li>
+          <li><span>3</span><div><strong>Relative depth</strong><small>unitless</small></div></li>
+          <li><span>4</span><div><strong>Height estimate</strong><small>calibrated / custom</small></div></li>
+          <li><span>5</span><div><strong>Inspect &amp; export</strong><small>2D · 3D · files</small></div></li>
+        </ol>
+        <div class="empty-notes">
+          <p><strong>Estimates, not surveys.</strong> The Stage 12 calibration yields an estimated height surface, not surveyed absolute elevation. Evaluation covers ten GAMUS test scenes; broader generalization is not established.</p>
+          <p><strong>No invented georeferencing.</strong> PNG/JPG inputs have no CRS or map transform. Outputs stay on the source pixel grid.</p>
+        </div>
+        <div id="recent-runs" class="recent" hidden>
+          <h2 class="recent-title">Recent runs in this browser</h2>
+          <ul id="recent-list"></ul>
+        </div>
+      </div>
+
+      <!-- Processing -->
+      <div id="state-processing" class="ws-state ws-processing" hidden>
+        <div class="proc-visual">
+          <img id="proc-image" alt="Image being processed">
+          <div class="scanline" aria-hidden="true"></div>
+        </div>
+        <div class="proc-panel">
+          <h2 class="proc-title">Processing <span id="proc-file" class="muted"></span></h2>
+          <ol class="phases" aria-live="polite">
+            <li id="phase-upload" data-state="active">
+              <span class="phase-icon" aria-hidden="true"></span>
+              <div class="phase-body">
+                <span class="phase-name">Uploading to backend</span>
+                <div class="bar" role="progressbar" aria-label="Upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="upload-bar"></span></div>
+                <span id="upload-text" class="phase-meta">Starting…</span>
+              </div>
+            </li>
+            <li id="phase-infer" data-state="pending">
+              <span class="phase-icon" aria-hidden="true"></span>
+              <div class="phase-body">
+                <span class="phase-name">Running frozen model &amp; writing exports</span>
+                <div class="bar bar--indeterminate" aria-hidden="true"><span></span></div>
+                <span id="infer-text" class="phase-meta">Waiting for upload</span>
+              </div>
+            </li>
+            <li id="phase-load" data-state="pending">
+              <span class="phase-icon" aria-hidden="true"></span>
+              <div class="phase-body">
+                <span class="phase-name">Loading previews &amp; 3D surface</span>
+                <span id="load-text" class="phase-meta">—</span>
+              </div>
+            </li>
+          </ol>
+          <p class="hint">The API does not report inference progress, so no percentage is shown for that step. It completes when the backend responds.</p>
+          <button id="cancel-btn" class="btn btn--ghost btn--sm" type="button">Stop waiting</button>
+        </div>
+      </div>
+
+      <!-- Error -->
+      <div id="state-error" class="ws-state ws-error" role="alert" hidden>
+        <svg viewBox="0 0 48 48" class="err-icon" aria-hidden="true"><circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M24 14v13m0 6v1" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        <h2 id="error-title">Processing failed</h2>
+        <p id="error-text" class="error-text"></p>
+        <p id="error-endpoint" class="muted mono"></p>
+        <div class="error-actions">
+          <button id="error-retry" class="btn btn--primary" type="button">Try again</button>
+          <button id="error-dismiss" class="btn btn--ghost" type="button">Back</button>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div id="state-results" class="ws-results" hidden>
+        <div class="run-summary">
+          <div class="run-title">
+            <span class="eyebrow">Run <code id="run-id"></code></span>
+            <h2 id="run-name">—</h2>
+          </div>
+          <dl class="run-facts">
+            <div><dt>Source grid</dt><dd id="run-grid">—</dd></div>
+            <div><dt>Interpretation</dt><dd id="run-mode">—</dd></div>
+            <div><dt>Height units</dt><dd><span id="run-units" class="chip chip--height">—</span></dd></div>
+            <div><dt>Georeferencing</dt><dd id="run-geo">—</dd></div>
+          </dl>
+        </div>
+
+        <div class="accuracy" role="note" aria-label="Accuracy note">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19L12 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4.5m0 2.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <div>
+            <p id="accuracy-note" class="accuracy-main"></p>
+            <p id="height-label" class="accuracy-sub"></p>
+          </div>
+        </div>
+
+        <div class="inspect-grid">
+          <section class="card stage-card" id="results-stage" aria-label="Map and terrain views">
+            <div class="stage-toolbar">
+              <div class="segmented" role="tablist" aria-label="View mode">
+                <button id="mode-2d" role="tab" aria-selected="true" aria-controls="map-panel" type="button">2D maps</button>
+                <button id="mode-3d" role="tab" aria-selected="false" aria-controls="terrain-panel" type="button">3D terrain</button>
+              </div>
+              <div id="layer-tabs" class="layer-tabs" role="tablist" aria-label="Map layer"></div>
+            </div>
+
+            <!-- 2D -->
+            <div id="map-panel" class="view-panel" role="tabpanel" aria-labelledby="mode-2d">
+              <div id="map-stage" class="stage">
+                <div id="map-frame" class="map-frame" tabindex="0" role="application" aria-label="Map. Click to inspect a pixel. With focus: arrow keys move the crosshair (Shift for 10 px), Enter samples.">
+                  <img id="map-base" alt="RGB input preview" draggable="false">
+                  <img id="map-layer" alt="" draggable="false">
+                  <div id="map-cursor" class="map-cursor" hidden></div>
+                  <div id="map-marker" class="map-marker" hidden></div>
+                </div>
+                <div id="map-hover" class="stage-badge mono" aria-hidden="true">x —, y —</div>
+                <div id="map-loading" class="stage-loading" hidden><span class="spinner"></span>Loading preview…</div>
+              </div>
+              <div class="stage-foot">
+                <div id="legend" class="legend" hidden>
+                  <span id="legend-title" class="legend-title"></span>
+                  <span id="legend-lo" class="mono legend-val"></span>
+                  <span id="legend-bar" class="legend-bar"></span>
+                  <span id="legend-hi" class="mono legend-val"></span>
+                </div>
+                <label id="opacity-wrap" class="range-field" hidden>
+                  <span>Layer over RGB</span>
+                  <input id="layer-opacity" type="range" min="0" max="100" value="100">
+                  <span id="layer-opacity-val" class="mono">100%</span>
+                </label>
+              </div>
+              <p id="legend-note" class="stage-note"></p>
+            </div>
+
+            <!-- 3D -->
+            <div id="terrain-panel" class="view-panel" role="tabpanel" aria-labelledby="mode-3d" hidden>
+              <div class="terrain-controls">
+                <label class="select-field">
+                  <span>Surface</span>
+                  <select id="surface-kind"></select>
+                </label>
+                <label class="select-field">
+                  <span>Colour</span>
+                  <select id="color-mode"></select>
+                </label>
+                <label class="range-field">
+                  <span>Exaggeration</span>
+                  <input id="exaggeration" type="range" min="0.25" max="4" step="0.05" value="1">
+                  <span id="exaggeration-val" class="mono">1.00×</span>
+                </label>
+              </div>
+              <div id="terrain-stage" class="stage stage--3d">
+                <div class="terrain-buttons" role="toolbar" aria-label="Camera controls">
+                  <button class="icon-btn" data-nudge="zoomIn" type="button" aria-label="Zoom in" title="Zoom in">+</button>
+                  <button class="icon-btn" data-nudge="zoomOut" type="button" aria-label="Zoom out" title="Zoom out">−</button>
+                  <button class="icon-btn" data-nudge="rotateLeft" type="button" aria-label="Rotate left" title="Rotate left">⟲</button>
+                  <button class="icon-btn" data-nudge="rotateRight" type="button" aria-label="Rotate right" title="Rotate right">⟳</button>
+                  <button class="icon-btn" id="auto-orbit" type="button" aria-pressed="false" aria-label="Auto-orbit" title="Auto-orbit">◎</button>
+                  <button class="icon-btn" id="reset-view" type="button" aria-label="Reset camera" title="Reset camera">⌂</button>
+                  <button class="icon-btn" id="fullscreen-3d" type="button" aria-label="Toggle fullscreen" title="Fullscreen">⛶</button>
+                </div>
+                <div id="terrain-loading" class="stage-loading" hidden><span class="spinner"></span><span id="terrain-loading-text">Loading surface…</span></div>
+                <div id="terrain-fallback" class="stage-fallback" hidden></div>
+                <div id="terrain-legend" class="stage-badge legend-mini" hidden></div>
+              </div>
+              <p id="terrain-note" class="stage-note"></p>
+              <p class="stage-note">
+                Fallback: <a id="viewer-link" href="#" target="_blank" rel="noopener">open the generated terrain_viewer.html</a> (needs internet for Three.js CDN).
+              </p>
+            </div>
+          </section>
+
+          <aside class="card inspector" aria-labelledby="h-inspect">
+            <header class="card-head card-head--tight">
+              <span class="step-num" aria-hidden="true">4</span>
+              <h2 id="h-inspect">Point inspector</h2>
+            </header>
+            <div id="inspect-empty" class="inspect-empty">
+              <svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 4v8m0 16v8M4 20h8m16 0h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <p>Click the map or the 3D terrain to read exact source-pixel values.</p>
+            </div>
+            <div id="inspect-result" hidden aria-live="polite">
+              <div class="coord">
+                <div><span class="muted">x (column)</span><strong id="ins-x" class="mono">—</strong></div>
+                <div><span class="muted">y (row)</span><strong id="ins-y" class="mono">—</strong></div>
+              </div>
+              <p id="ins-grid" class="hint mono"></p>
+              <dl class="readings" id="ins-readings"></dl>
+              <p id="ins-source" class="hint"></p>
+            </div>
+            <p id="inspect-error" class="field-msg" role="alert" hidden></p>
+            <form id="sample-form" class="sample-form" novalidate>
+              <span class="field-label">Sample exact pixel</span>
+              <div class="field-row">
+                <label class="field field--compact"><span class="visually-hidden">Column x</span><input id="sample-x" type="number" min="0" step="1" placeholder="x" inputmode="numeric"></label>
+                <label class="field field--compact"><span class="visually-hidden">Row y</span><input id="sample-y" type="number" min="0" step="1" placeholder="y" inputmode="numeric"></label>
+                <button class="btn btn--ghost btn--sm" type="submit">Sample</button>
+              </div>
+              <p class="hint">Zero-based column/row in the source image grid.</p>
+            </form>
+            <div id="sample-history-wrap" hidden>
+              <h3 class="mini-title">Recent samples</h3>
+              <ul id="sample-history" class="history"></ul>
+            </div>
+          </aside>
+        </div>
+
+        <section class="card exports" id="step-export" aria-labelledby="h-export">
+          <header class="card-head">
+            <span class="step-num" aria-hidden="true">5</span>
+            <h2 id="h-export">Export</h2>
+          </header>
+          <div id="export-groups" class="export-groups"></div>
+          <p id="export-missing" class="hint"></p>
+        </section>
+
+        <details class="card run-details">
+          <summary><span class="summary-title">Run details &amp; calibration parameters</span></summary>
+          <dl id="run-details" class="kv kv--wide"></dl>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>DepthWizard research prototype. Relative depth is unitless. Calibrated heights are estimates from Stage 12 validation-scene calibration — not surveyed elevation. PNG/JPG outputs carry no CRS or map transform. Evaluated on ten GAMUS test scenes only.</p>
+  </footer>
+
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

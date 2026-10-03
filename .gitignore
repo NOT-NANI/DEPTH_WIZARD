@@ -1,0 +1,46 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Environment / secrets
+.env
+.env.*
+
+# Datasets
+data/
+*.h5
+*.hdf5
+
+# Model weights / checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Generated outputs
+outputs/
+runs/
+logs/
+
+# NumPy generated data
+*.npy
+*.npz
+
+# Generated visualization files
+depth.png
+*_depth.png
+*_diagnostics.png
+*_error_map.png
+
+# Local test images
+test.jpg
+

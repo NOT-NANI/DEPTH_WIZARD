@@ -1,0 +1,16 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.git/
+.github/
+data/
+*.h5
+outputs/stage12/checkpoints/checkpoint_*.pt
+outputs/stage12/checkpoints/experiment_A_*.pt
+outputs/stage12/checkpoints/smoke_test_*.pt
+outputs/final/runs/*
+tests/

@@ -1,0 +1,8 @@
+torch
+torchvision
+transformers
+huggingface_hub
+Pillow
+numpy
+h5py
+matplotlib
