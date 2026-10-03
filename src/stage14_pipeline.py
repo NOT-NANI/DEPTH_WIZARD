@@ -5,6 +5,9 @@ import base64
 import io
 import json
 import math
+import os
+import shutil
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +21,42 @@ MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 STAGE12_CHECKPOINT = ROOT / "outputs/stage12/checkpoints/experiment_B_best.pt"
 STAGE12_CALIBRATION = ROOT / "outputs/stage12/calibration.json"
 STAGE12_CONFIG = ROOT / "outputs/stage12/training_config.json"
+CHECKPOINT_REPO_ID = os.environ.get("DEPTHWIZARD_CHECKPOINT_REPO", "nanii141149/Depth_wizard")
+CHECKPOINT_REPO_TYPE = "space"
+
+
+def ensure_stage12_checkpoint() -> Path:
+    """Fetch the frozen checkpoint from the public HF Space when absent locally."""
+    if STAGE12_CHECKPOINT.is_file():
+        return STAGE12_CHECKPOINT
+    from huggingface_hub import hf_hub_download
+
+    relative_name = "outputs/stage12/checkpoints/experiment_B_best.pt"
+    try:
+        downloaded = Path(hf_hub_download(
+            repo_id=CHECKPOINT_REPO_ID,
+            repo_type=CHECKPOINT_REPO_TYPE,
+            filename=relative_name,
+            token=False,
+        ))
+    except Exception as exc:
+        raise RuntimeError(
+            "Frozen Stage 12 checkpoint is missing and could not be downloaded "
+            f"from the public Hugging Face Space {CHECKPOINT_REPO_ID!r}. "
+            "Confirm that the Space is public and contains "
+            f"{relative_name!r}; details: {exc}"
+        ) from exc
+
+    STAGE12_CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
+    # Publish atomically so concurrent first requests cannot see a partial file.
+    with tempfile.NamedTemporaryFile(dir=STAGE12_CHECKPOINT.parent, delete=False) as temp_file:
+        temporary_path = Path(temp_file.name)
+    try:
+        shutil.copyfile(downloaded, temporary_path)
+        temporary_path.replace(STAGE12_CHECKPOINT)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return STAGE12_CHECKPOINT
 
 
 @dataclass
@@ -81,7 +120,8 @@ def run_frozen_model(rgb: np.ndarray, calibration_mode: str = "stage12_validatio
     import torch
     from scripts.run_stage12_experiment import infer_normalized, load_model_state
     device = torch.device("mps") if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() else torch.device("cpu")
-    model, processor, low, high = load_model_state(STAGE12_CHECKPOINT, device)
+    checkpoint_path = ensure_stage12_checkpoint()
+    model, processor, low, high = load_model_state(checkpoint_path, device)
     normalized = infer_normalized(model, processor, rgb, device)
     base_height = low + normalized * (high - low)
     calibration = json.loads(STAGE12_CALIBRATION.read_text())["Adapted B SmoothL1+edge"]
